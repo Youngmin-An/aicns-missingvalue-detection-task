@@ -152,7 +152,7 @@ def __detect_in_front_of(
         .filter(F.col(time_col_name) == F.col("min_time"))
         .drop("min_time")
     )
-    both_ends = last_of_previous.union(first_observed).sort(time_col_name)
+    both_ends = last_of_previous.unionByName(first_observed).sort(time_col_name)
     mvd = MissingValueDetector("regular")
     report: MissingValueReport = mvd.detect_missing_values(
         ts=both_ends,
@@ -254,14 +254,18 @@ def detect_missing_value(
     # todo: when refactoring, migrate this logic
     # base case
     if ts.count() == 0:
+        logger.info("deduplicated ts has no data")
         last_of_previous = __get_last_of_marked_data(
             app_conf["FEATURE_ID"], app_conf["start"], time_col_name, data_col_name
         )
         if last_of_previous.count() == 0:
             # no decision
+            logger.info("has no last of previous data, so can't estimate missing values")
             return ts.limit(0)
         else:
             # span from previous data
+            logger.info("last of previous data is")
+            logger.info(last_of_previous.show())
             spanned_marked_df = __span_from_last_data(
                 last_of_previous,
                 app_conf["end"],
@@ -270,10 +274,17 @@ def detect_missing_value(
                 period,
                 preserve_last=True,
             )
+            logger.info("spanned missing values are")
+            logger.info(spanned_marked_df.show())
             # cut off
+            lower_bound_timestamp = app_conf["start"].int_timestamp * 1000
+            logger.info(f"lower_bound_timestamp: {lower_bound_timestamp}")
             return spanned_marked_df.filter(
-                F.col(time_col_name) >= app_conf["start"].int_timestamp * 1000
+                F.col(time_col_name) >= lower_bound_timestamp
             )
+
+    logger.info("deduplicated time series is")
+    logger.info(ts.show())
     marked_in_front_of = __detect_in_front_of(
         app_conf["FEATURE_ID"],
         app_conf["start"],
@@ -282,11 +293,20 @@ def detect_missing_value(
         data_col_name,
         period,
     )
+    logger.info("unmarked mv in front of")
+    logger.info(marked_in_front_of.show())
+
     marked_between = __detect_between(ts, time_col_name, data_col_name, period)
+    logger.info("unmarked mv between")
+    logger.info(marked_between.show())
+
     marked_behind = __detect_behind(
         ts, app_conf["end"], time_col_name, data_col_name, period
     )
-    marked_df = marked_in_front_of.union(marked_between.union(marked_behind)).sort(
+    logger.info("unmarked mv behind")
+    logger.info(marked_behind.show())
+
+    marked_df = marked_in_front_of.unionByName(marked_between.unionByName(marked_behind)).sort(
         time_col_name
     )
     return marked_df
